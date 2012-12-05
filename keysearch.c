@@ -8,23 +8,44 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <linux/mempool.h>
 
 struct crypt_config
 {
    struct dm_dev *dev;
-   sector_t start;
-   mempool_t *io_pool;
-   mempool_t *page_pool;
+   void *start;
+   void *io_pool;
+   void *req_pool;
+   void *page_pool;
+   void *bs;
+
+   void *io_queue;
+   void *crypt_queue;
+
    /* crypto related data */
+   char *cipher;
+   char *cipher_mode;
+
    struct crypt_iv_operations *iv_gen_ops;
-   char *iv_mode;
-   void *iv_gen_private;
-   sector_t iv_offset;
+   union {
+       struct {
+           void *tfm;
+           void *hash_tfm;
+           unsigned char *salt;
+       } essiv;
+       struct {
+           int shift;
+       } benbi;
+   } iv_gen_private;
+   void *iv_offset;
    unsigned int iv_size;
+
+   unsigned int dmreq_start;
+   void *req;
+
    struct crypto_tfm *tfm;
+   unsigned long flags;
    unsigned int key_size;
-   u8 key[0];
+   unsigned char key[0];
 } __attribute__ ((packed));
 
 int keysearch(char *mem, int size)
@@ -37,23 +58,30 @@ int keysearch(char *mem, int size)
         cr = (struct crypt_config *) mem;
 
         if(
+           //(void *) cr->dev            > (void *) 0xc0000000 &&
+           (void *) cr->start          > (void *) 0xc0000000 &&
            (void *) cr->io_pool        > (void *) 0xc0000000 &&
-           (void *) cr->tfm            > (void *) 0xc0000000 &&
-           (void *) cr->dev            > (void *) 0xc0000000 &&
-           (void *) cr->io_pool        > (void *) 0xc0000000 &&
+           (void *) cr->req_pool       > (void *) 0xc0000000 &&
            (void *) cr->page_pool      > (void *) 0xc0000000 &&
-           (void *) cr->iv_gen_ops     > (void *) 0xc0000000 &&
-           (void *) cr->iv_mode        > (void *) 0xc0000000 &&
-           (void *) cr->iv_gen_private > (void *) 0xc0000000 &&
-           (cr->key_size == 16 || cr->key_size == 32) &&
+           (void *) cr->bs             > (void *) 0xc0000000 &&
+           (void *) cr->io_queue       > (void *) 0xc0000000 &&
+           (void *) cr->crypt_queue    > (void *) 0xc0000000 &&
+           (void *) cr->cipher         > (void *) 0xc0000000 &&
+           (void *) cr->cipher_mode    > (void *) 0xc0000000 &&
+           ((void *) cr->iv_gen_private.essiv.tfm < (void *) 0xc0000000
+             || ((void *) cr->iv_gen_private.essiv.hash_tfm > (void *) 0xc0000000 &&
+                 (void *) cr->iv_gen_private.essiv.salt     > (void *) 0xc0000000)) &&
+           cr->iv_offset == 0 &&
            (cr->iv_size  == 16 || cr->iv_size  == 32) &&
-           cr->iv_offset == 0
+           (void *) cr->req            > (void *) 0xc0000000 &&
+           (void *) cr->tfm            > (void *) 0xc0000000 &&
+           (cr->key_size == 16 || cr->key_size == 32 || cr->key_size == 64)
            )
           {
              if(cr->start > 0)
-               printf("offset: %ld blocks\n",
+               printf("offset: %lu blocks\n",
                       (unsigned long int ) cr->start);
-             printf("keylenght: %d\n",
+             printf("keylength: %d\n",
                     (cr->key_size * 8));
              printf("key: ");
              for(j = 0; j < cr->key_size; j++)
